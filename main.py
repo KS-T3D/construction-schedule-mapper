@@ -26,9 +26,15 @@ import numpy as np
 # ---- Supabase ----
 from supabase import create_client, Client
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")   # service_role or anon; set in Render env
-sb: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()   # use the legacy anon JWT (eyJ...), not sb_publishable_
+sb: Optional[Client] = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as _e:
+        print("Supabase init failed:", _e)   # don't crash the app; /map still works, /save won't
+        sb = None
 
 # ---- embeddings (free local by default) ----
 _EMB = None
