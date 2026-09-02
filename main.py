@@ -60,15 +60,25 @@ def embed(texts: list[str]) -> np.ndarray:
             out.extend([d["embedding"] for d in r.json()["data"]])
         return np.array(out, dtype=np.float32)
     m = get_embedder()
-    return np.array(m.encode(texts, batch_size=128, show_progress_bar=False), dtype=np.float32)
+    # smaller batch to keep peak memory low on Render free tier (512MB)
+    return np.array(m.encode(texts, batch_size=32, show_progress_bar=False, convert_to_numpy=True), dtype=np.float32)
 
 def cosine_topk(query_vecs: np.ndarray, target_vecs: np.ndarray, k=3):
     # normalize
     q = query_vecs / (np.linalg.norm(query_vecs, axis=1, keepdims=True) + 1e-9)
     t = target_vecs / (np.linalg.norm(target_vecs, axis=1, keepdims=True) + 1e-9)
-    sims = q @ t.T                       # (n_query, n_target)
-    idx = np.argsort(-sims, axis=1)[:, :k]
-    return idx, sims
+    # chunk the query rows so we never allocate a full (n_query x n_target) matrix at once
+    n = q.shape[0]
+    idx_all = np.empty((n, k), dtype=np.int32)
+    sims_all = np.empty((n, k), dtype=np.float32)
+    CH = 512
+    for i in range(0, n, CH):
+        block = q[i:i+CH] @ t.T                       # (<=512, n_target)
+        part = np.argsort(-block, axis=1)[:, :k]
+        idx_all[i:i+block.shape[0]] = part
+        for r in range(block.shape[0]):
+            sims_all[i+r] = block[r, part[r]]
+    return idx_all, sims_all
 
 # ---- date helpers ----
 def parse_date(s):
@@ -180,7 +190,31 @@ def normalize_location(text: str) -> str:
 
 # ---- app ----
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+@app.options("/{rest_of_path:path}")
+async def preflight(rest_of_path: str):
+    from fastapi.responses import Response
+    return Response(status_code=204, headers={
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    })
+
+from fastapi.responses import JSONResponse
+from starlette.requests import Request as _Req
+@app.exception_handler(Exception)
+async def any_error(request: _Req, exc: Exception):
+    # always return CORS headers even on error, so the browser shows the real message
+    return JSONResponse(status_code=500, content={"error": str(exc)},
+                        headers={"Access-Control-Allow-Origin": "*"})
 
 @app.get("/")
 def health(): return {"ok": True, "embedder": "openai" if os.environ.get("OPENAI_API_KEY") else "local", "supabase": bool(sb)}
@@ -316,7 +350,7 @@ async def map_endpoint(client: UploadFile = File(...), base: UploadFile = File(.
             lh = [a for a in acts if learned.get(pattern_of(a["name"])) == (cell["category"], cell["stage"])]
             if lh: matched, rule, conf = lh, "learned", 0.98
             else:
-                cand = [(acts[j], float(sims[ci, j])) for j in idx[ci] if sims[ci, j] >= SEM_THRESHOLD]
+                cand = [(acts[int(idx[ci][r])], float(sims[ci][r])) for r in range(idx.shape[1]) if sims[ci][r] >= SEM_THRESHOLD]
                 if cand:
                     top = cand[0][1]; matched = [a for a, s in cand if s >= top - 0.05]; rule, conf = "semantic", top
         results.append(build_result(cell, matched, rule, conf, ps, pe))
@@ -333,7 +367,7 @@ async def map_structure(client: UploadFile = File(...), base: UploadFile = File(
     for ci, cell in enumerate(cells):
         key = f'{cell["structure"]}||{cell["zone"]}'
         if key not in groups:
-            cand = [(acts[j], float(sims[ci, j])) for j in idx[ci] if sims[ci, j] >= SEM_THRESHOLD]
+            cand = [(acts[int(idx[ci][r])], float(sims[ci][r])) for r in range(idx.shape[1]) if sims[ci][r] >= SEM_THRESHOLD]
             groups[key] = {"structure": cell["structure"], "zone": cell["zone"], "level": level_of(cell["structure"]),
                            "candidate_activity_ids": [a["activity_id"] for a, s in cand[:40]],
                            "confidence": round(cand[0][1],3) if cand else 0.0}
