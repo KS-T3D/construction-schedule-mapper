@@ -1,1 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T3D Schedule Mapper</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{--brand:#7c3aed;--brand-soft:#f3eefe;--brand-line:#c9b6f5;--ink:#1e2330;--ink2:#5b6270;--ink3:#8a909c;--line:#e6e8ee;--line2:#eef0f4;--bg:#f7f8fa;--green:#16a34a;--green-soft:#e7f6ec;--amber:#b45309;--amber-soft:#fdf3e0;--red:#dc2626;--red-soft:#fdeaea;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:13.5px;line-height:1.45}
+  .wrap{max-width:1240px;margin:0 auto;padding:22px}
+  h1{font-size:20px;font-weight:800}h1 span{color:var(--brand)}
+  .topbar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(20,24,40,.04)}
+  .card h2{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .card h2 .n{width:20px;height:20px;border-radius:50%;background:var(--brand);color:#fff;font-size:11px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  label.fld{display:block;font-size:11.5px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.03em;margin:10px 0 4px}
+  input[type=text],input[type=password],select,input[type=date],input[type=number]{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:13px;font-family:inherit;color:var(--ink)}
+  input:focus,select:focus{outline:none;border-color:var(--brand)}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:170px}
+  .btn{border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn:hover{opacity:.92}.btn.ghost{background:#fff;color:var(--brand)}.btn:disabled{opacity:.45;cursor:not-allowed}.btn.sm{padding:6px 11px;font-size:12px}
+  .cog{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 11px;cursor:pointer;font-size:12px;color:var(--ink2)}.cog:hover{border-color:var(--brand-line);color:var(--brand)}
+  .file-drop{border:2px dashed var(--brand-line);border-radius:10px;padding:20px;text-align:center;color:var(--ink2);cursor:pointer;background:var(--brand-soft)}
+  .file-drop.has{border-style:solid;border-color:var(--green);background:var(--green-soft);color:var(--green)}
+  .muted{color:var(--ink3)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:none;background:#fff;padding:8px 14px;font-size:12.5px;cursor:pointer;color:var(--ink2);font-weight:600;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--brand);color:#fff}
+  .pill{display:inline-flex;align-items:center;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px}
+  .p-changed{background:var(--amber-soft);color:var(--amber)}.p-unchanged{background:#eef0f4;color:var(--ink2)}.p-orphan{background:var(--red-soft);color:var(--red)}.p-new{background:var(--green-soft);color:var(--green)}.p-edited{background:#ede9fe;color:var(--brand)}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
+  th{position:sticky;top:0;background:#fbfbfd;text-align:left;padding:8px 9px;font-size:10.5px;text-transform:uppercase;letter-spacing:.02em;color:var(--ink2);font-weight:600;border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
+  td{padding:6px 9px;border-bottom:1px solid var(--line2);vertical-align:top;white-space:normal;word-break:break-word}
+  tr.rowchg td{background:#fffdf6}tr.roworph td{background:#fef7f7}
+  .tblwrap{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .stat{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:10px 0}.stat b{color:var(--ink)}
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--ink);color:#fff;padding:11px 15px;border-radius:9px;font-size:12.5px;opacity:0;transform:translateY(8px);transition:.2s;z-index:60;max-width:360px}.toast.show{opacity:1;transform:translateY(0)}
+  .hide{display:none}
+  .chip2{display:inline-flex;align-items:center;gap:3px;background:var(--brand-soft);color:var(--brand);border-radius:5px;padding:1px 5px;margin:1px 2px 1px 0;font-size:11px;font-weight:600}
+  .chipx{cursor:pointer;font-weight:700;opacity:.6}.chipx:hover{opacity:1}
+  .actcell{cursor:pointer;max-width:230px}.actcell:hover{background:#faf9ff}.pencil{color:var(--brand);opacity:.6;margin-left:3px}
+  .overlay{position:fixed;inset:0;background:rgba(30,35,48,.42);z-index:70;display:none;align-items:center;justify-content:center}.overlay.show{display:flex}
+  .loader{background:#fff;border-radius:14px;padding:26px 34px;text-align:center;min-width:300px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .spin{width:34px;height:34px;border:3px solid var(--brand-soft);border-top-color:var(--brand);border-radius:50%;margin:0 auto 14px;animation:sp .8s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+  .modal{position:fixed;inset:0;background:rgba(30,35,48,.4);z-index:80;display:none;align-items:center;justify-content:center}.modal.show{display:flex}.modal .box{background:#fff;border-radius:14px;padding:22px;width:460px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .filtbar{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+  .filtbar input,.filtbar select{width:auto;padding:5px 7px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>TRACK<span>3D</span> Schedule Mapper</h1>
+    <button class="cog" id="settingsBtn">⚙ Settings</button>
+  </div>
+  <div id="connMsg" class="hide"></div>
 
+  <div class="card hide" id="selCard">
+    <h2><span class="n">1</span> Company &amp; project</h2>
+    <div class="row">
+      <div><label class="fld">Company</label><select id="orgSel"></select>
+        <div style="margin-top:6px"><input type="text" id="newOrg" placeholder="or new company" style="font-size:12px"><button class="btn ghost sm" id="addOrg" style="margin-top:6px">Create</button></div></div>
+      <div><label class="fld">Project</label><select id="projSel"></select>
+        <div style="margin-top:6px"><input type="text" id="newProj" placeholder="or new project" style="font-size:12px"><button class="btn ghost sm" id="addProj" style="margin-top:6px">Create</button></div></div>
+      <div><label class="fld">Project window (optional)</label><input type="date" id="newProjStart" title="Start date"><input type="number" id="newProjDur" min="1" placeholder="Duration (months)" style="margin-top:6px"></div>
+    </div>
+    <div id="projWindow" class="hide" style="margin-top:10px;background:#fbfbfd;border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+      <label class="fld" style="margin:0 0 6px">Selected project window</label>
+      <div class="row" style="gap:10px;align-items:flex-end">
+        <div style="flex:0 0 auto"><label class="fld" style="margin:0 0 2px">Start</label><input type="date" id="editProjStart" style="width:auto"></div>
+        <div style="flex:0 0 auto"><label class="fld" style="margin:0 0 2px">Months</label><input type="number" id="editProjDur" min="1" style="width:110px"></div>
+        <button class="btn ghost sm" id="saveProjWin">Save</button><span id="projWinMsg" class="muted" style="font-size:11.5px"></span></div>
+    </div>
+    <div id="versInfo" class="muted" style="margin-top:10px;font-size:12px"></div>
+  </div>
+
+  <div class="card hide" id="fileCard">
+    <h2><span class="n">2</span> Files &amp; method</h2>
+    <div class="row">
+      <div><label class="fld">Client schedule (.xer .csv .xlsx)</label><div class="file-drop" id="clientDrop">Choose client schedule<input type="file" id="clientFile" accept=".xer,.csv,.xls,.xlsx" class="hide"></div></div>
+      <div><label class="fld">Base T3D file (.csv)</label><div class="file-drop" id="baseDrop">Choose base T3D CSV<input type="file" id="baseFile" accept=".csv" class="hide"></div></div>
+    </div>
+    <label class="fld" style="margin-top:14px">Mapping method</label>
+    <div class="seg" id="methodSeg">
+      <button data-m="full" class="on">One-shot (full)</button>
+      <button data-m="seq">Sequential (structure → stages)</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Sequential is recommended for a first mapping (confirm locations, then stages). One-shot is quicker for repeat runs. Either works anytime.</div>
+    <div style="margin-top:14px"><button class="btn" id="mapBtn" disabled>Run mapping</button><span id="mapMsg" class="muted" style="margin-left:10px"></span></div>
+  </div>
+
+  <!-- STEP: structure review (sequential only) -->
+  <div class="card hide" id="structCard">
+    <h2><span class="n">S1</span> Confirm structures</h2>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px">Review which activities belong to each structure/zone. Adjust, then continue to stage mapping.</div>
+    <div class="tblwrap"><table id="structTable"><thead></thead><tbody></tbody></table></div>
+    <div style="margin-top:14px"><button class="btn" id="toStagesBtn">Continue to stages →</button></div>
+  </div>
+
+  <!-- STEP: review + save -->
+  <div class="card hide" id="reviewCard">
+    <h2><span class="n">3</span> Review &amp; approve</h2>
+    <div class="stat" id="statBar"></div>
+    <div class="filtbar" id="filtBar"></div>
+    <div class="muted" style="font-size:11.5px;margin-bottom:8px">Checkbox = include this row's new dates in the CSV. Edit dates inline (DD-MM-YYYY). Click Activity cells to change the mapping.</div>
+    <div class="tblwrap"><table id="revTable"><thead></thead><tbody></tbody></table></div>
+    <div style="margin-top:14px"><button class="btn" id="approveBtn">Approve &amp; save + download CSV</button><span id="revMsg" class="muted" style="margin-left:10px"></span></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay"><div class="loader"><div class="spin"></div><div id="loadText" style="font-weight:600">Mapping…</div><div id="loadSub" class="muted" style="font-size:11.5px;margin-top:4px"></div></div></div>
+
+<div class="modal" id="settingsModal"><div class="box">
+  <h2 style="font-size:15px;font-weight:700;margin-bottom:12px">Settings</h2>
+  <div id="settingsGate">
+    <label class="fld">Password</label><input type="password" id="gatePass" placeholder="enter password">
+    <div style="margin-top:12px"><button class="btn sm" id="gateBtn">Unlock</button><button class="btn ghost sm" id="gateClose">Close</button><span id="gateMsg" class="muted" style="margin-left:8px"></span></div>
+  </div>
+  <div id="settingsFields" class="hide">
+    <label class="fld">Backend URL (Render)</label><input type="text" id="backendUrl" placeholder="https://your-service.onrender.com">
+    <label class="fld">Supabase URL</label><input type="text" id="sbUrl">
+    <label class="fld">Supabase anon key</label><input type="password" id="sbKey">
+    <div style="margin-top:14px"><button class="btn sm" id="saveConn">Save &amp; reconnect</button><button class="btn ghost sm" id="closeSettings">Close</button></div>
+  </div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== EMBEDDED CONFIG (edit before deploy) =====
+const DEFAULT_BACKEND = 'https://construction-schedule-mapper.onrender.com';   // Render backend URL
+const DEFAULT_SB_URL = 'https://svewwfvmfgjoysmenbwd.supabase.co';
+const DEFAULT_SB_KEY = 'sb_publishable_VSGJKiDZjrkkYdZm_W4NYA_Q8n7ScMD';
+const SETTINGS_PASSWORD = 'track3d';
+// ================================================
+
+let sb=null, orgId=null, projId=null, backendUrl=DEFAULT_BACKEND;
+let method='full';
+let mapData=null;         // {mappings, stats, activities}
+let structData=null;      // sequential step-1 result
+const $=id=>document.getElementById(id);
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+function fmtDMY(iso){if(!iso)return '';const [y,m,d]=iso.split('-');return d&&m&&y?`${d}-${m}-${y}`:'';}
+function dmyToIso(s){if(!s)return '';const p=s.split(/[-\/]/);if(p.length!==3)return '';let[d,m,y]=p;if(y.length===2)y='20'+y;return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;}
+
+// ---- connect ----
+async function connect(url,key,burl){
+  try{
+    sb=window.supabase.createClient(url,key);
+    const {error}=await sb.from('organizations').select('id').limit(1); if(error)throw error;
+    backendUrl=(burl||'').replace(/\/$/,'');
+    $('selCard').classList.remove('hide');$('fileCard').classList.remove('hide');
+    await loadOrgs(); return true;
+  }catch(e){toast('Connection failed: '+(e.message||e));return false;}
+}
+async function loadOrgs(){const {data}=await sb.from('organizations').select('*').order('name');
+  const s=$('orgSel');s.innerHTML='<option value="">— company —</option>';(data||[]).forEach(o=>{const op=document.createElement('option');op.value=o.id;op.textContent=o.name;s.appendChild(op);});}
+$('addOrg').onclick=async()=>{const n=$('newOrg').value.trim();if(!n)return;const {data,error}=await sb.from('organizations').insert({name:n}).select().single();if(error){toast('exists/error');return;}$('newOrg').value='';await loadOrgs();$('orgSel').value=data.id;$('orgSel').onchange();};
+$('orgSel').onchange=async()=>{orgId=$('orgSel').value||null;projId=null;const s=$('projSel');s.innerHTML='<option value="">— project —</option>';if(!orgId)return;const {data}=await sb.from('projects').select('*').eq('org_id',orgId).order('name');(data||[]).forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.name;s.appendChild(op);});};
+$('addProj').onclick=async()=>{if(!orgId){toast('pick company');return;}const n=$('newProj').value.trim();if(!n)return;const sd=$('newProjStart').value||null,du=$('newProjDur').value?parseInt($('newProjDur').value):null;const {data,error}=await sb.from('projects').insert({org_id:orgId,name:n,start_date:sd,duration_months:du}).select().single();if(error){toast('exists/error');return;}$('newProj').value='';$('newProjStart').value='';$('newProjDur').value='';await $('orgSel').onchange();$('projSel').value=data.id;$('projSel').onchange();};
+$('projSel').onchange=async()=>{projId=$('projSel').value||null;await loadWin();updateMapBtn();};
+async function loadWin(){if(!projId){$('projWindow').classList.add('hide');return;}const {data}=await sb.from('projects').select('*').eq('id',projId).single();$('projWindow').classList.remove('hide');$('editProjStart').value=data.start_date||'';$('editProjDur').value=data.duration_months||'';$('projWinMsg').textContent=(data.start_date?'Window active':'No window set');const {data:v}=await sb.from('schedule_versions').select('label').eq('project_id',projId).order('created_at',{ascending:false}).limit(1);$('versInfo').innerHTML=v&&v.length?('Latest saved: <b>'+v[0].label+'</b>'):'<b>No saved versions</b> — first mapping.';}
+$('saveProjWin').onclick=async()=>{if(!projId)return;await sb.from('projects').update({start_date:$('editProjStart').value||null,duration_months:$('editProjDur').value?parseInt($('editProjDur').value):null}).eq('id',projId);await loadWin();toast('window saved');};
+
+// ---- files/method ----
+let clientFileObj=null,baseFileObj=null;
+function wireDrop(d,i,cb){$(d).onclick=()=>$(i).click();$(i).onchange=e=>{const f=e.target.files[0];if(f){$(d).classList.add('has');$(d).firstChild.nodeValue=f.name;cb(f);}};}
+wireDrop('clientDrop','clientFile',f=>{clientFileObj=f;updateMapBtn();});
+wireDrop('baseDrop','baseFile',f=>{baseFileObj=f;updateMapBtn();});
+function updateMapBtn(){$('mapBtn').disabled=!(sb&&projId&&clientFileObj&&baseFileObj&&backendUrl);}
+$('methodSeg').querySelectorAll('button').forEach(b=>b.onclick=()=>{method=b.dataset.m;$('methodSeg').querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
+
+// ---- run ----
+$('mapBtn').onclick=async()=>{
+  if(!backendUrl){toast('Set the Backend URL in Settings');return;}
+  $('overlay').classList.add('show');$('loadText').textContent='Uploading & mapping…';$('loadSub').textContent='First request may take ~30-60s if the server was asleep';
+  try{
+    if(method==='full'){
+      const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
+      const res=await fetch(backendUrl+'/map',{method:'POST',body:fd});
+      if(!res.ok)throw new Error('Backend '+res.status+': '+(await res.text()).slice(0,200));
+      mapData=await res.json();
+      $('overlay').classList.remove('show');renderReview();$('reviewCard').classList.remove('hide');$('structCard').classList.add('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
+    }else{
+      const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
+      // need base cells too for step 2 — call /map to get cells+activities, and /map-structure for grouping
+      const [mres,sres]=await Promise.all([
+        fetch(backendUrl+'/map',{method:'POST',body:fd}),
+        fetch(backendUrl+'/map-structure',{method:'POST',body:(()=>{const f=new FormData();f.append('client',clientFileObj);f.append('base',baseFileObj);f.append('org_id',orgId||'');f.append('project_id',projId||'');return f;})()})
+      ]);
+      if(!mres.ok)throw new Error('Backend '+mres.status);
+      mapData=await mres.json();           // holds cells (in mappings) + activities
+      structData=await sres.json();
+      $('overlay').classList.remove('show');renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
+    }
+  }catch(e){$('overlay').classList.remove('show');$('mapMsg').textContent='Error: '+(e.message||e);}
+};
+
+// ---- sequential step 1: structures ----
+function renderStructures(){
+  const acts={};(mapData.activities||[]).forEach(a=>acts[a.id]=a);
+  $('structTable').querySelector('thead').innerHTML='<tr><th>Structure</th><th>Zone</th><th>Confidence</th><th>Candidate activities (edit)</th></tr>';
+  const tb=$('structTable').querySelector('tbody');tb.innerHTML='';
+  structData.structures.forEach((s,i)=>{
+    const tr=document.createElement('tr');
+    const chips=(s.candidate_activity_ids||[]).map(id=>`<span class="chip2">${acts[id]?acts[id].name.slice(0,28):id}<span class="chipx" data-i="${i}" data-id="${id}">×</span></span>`).join('');
+    tr.innerHTML=`<td><b>${s.level}</b></td><td>${s.zone}</td><td>${s.confidence}</td><td class="structacts" data-i="${i}">${chips||'<span class=muted>none</span>'} <span class="pencil" title="add">✎</span></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('.chipx').forEach(x=>x.onclick=()=>{const i=+x.dataset.i;structData.structures[i].candidate_activity_ids=structData.structures[i].candidate_activity_ids.filter(id=>id!==x.dataset.id);renderStructures();});
+  tb.querySelectorAll('.structacts').forEach(c=>c.onclick=e=>{if(e.target.classList.contains('chipx'))return;openStructEditor(+c.dataset.i,c);});
+}
+let seditor=null;
+function openStructEditor(i,cell){
+  if(seditor)seditor.remove();
+  const acts=mapData.activities||[];
+  const s=structData.structures[i];
+  const box=document.createElement('div');box.style.cssText='position:absolute;z-index:90;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:10px;width:340px';
+  box.innerHTML='<input type="text" placeholder="search activity" style="width:100%;padding:6px;font-size:12px;border:1px solid var(--line);border-radius:6px"><div class="res" style="max-height:200px;overflow:auto;margin-top:6px"></div>';
+  document.body.appendChild(box);seditor=box;
+  const r=cell.getBoundingClientRect();box.style.top=(window.scrollY+r.bottom+4)+'px';box.style.left=(window.scrollX+r.left)+'px';
+  const inp=box.querySelector('input'),res=box.querySelector('.res');
+  function draw(q){q=q.toLowerCase();res.innerHTML='';if(!q){res.innerHTML='<div class=muted style="font-size:12px">type to search</div>';return;}
+    acts.filter(a=>!s.candidate_activity_ids.includes(a.id)&&(a.id.toLowerCase().includes(q)||a.name.toLowerCase().includes(q))).slice(0,30).forEach(a=>{const d=document.createElement('div');d.style.cssText='padding:5px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--line2)';d.innerHTML=`<b>${a.id}</b> ${a.name}`;d.onclick=()=>{s.candidate_activity_ids.push(a.id);renderStructures();draw(inp.value);};res.appendChild(d);});}
+  draw('');inp.oninput=()=>draw(inp.value);inp.focus();
+}
+document.addEventListener('click',e=>{if(seditor&&!seditor.contains(e.target)&&!e.target.closest('.structacts'))(seditor.remove(),seditor=null);});
+
+$('toStagesBtn').onclick=async()=>{
+  $('overlay').classList.add('show');$('loadText').textContent='Mapping stages within confirmed structures…';$('loadSub').textContent='';
+  try{
+    const loc={};structData.structures.forEach(s=>{loc[s.structure+'||'+s.zone]=s.candidate_activity_ids;});
+    const cells=mapData.mappings.map(m=>m.cell);
+    const body={org_id:orgId||'',project_id:projId||'',location_assignments:loc,cells:cells,activities:mapData.activities};
+    const res=await fetch(backendUrl+'/map-stages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok)throw new Error('Backend '+res.status);
+    const sd=await res.json();mapData.mappings=sd.mappings;mapData.stats=sd.stats;
+    $('overlay').classList.remove('show');$('structCard').classList.add('hide');renderReview();$('reviewCard').classList.remove('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
+  }catch(e){$('overlay').classList.remove('show');toast('Error: '+(e.message||e));}
+};
+
+// ---- review ----
+let filters={structure:'',zone:'',category:'',stage:'',state:'',actid:'',actname:''};
+function stateLabel(m){return m.edited?'edited':m.state==='changed'?'changed':m.state==='orphaned'?'orphaned':m.matched_ids.length?((m.cell.start||m.cell.end)?'unchanged':'newly dated'):'unmapped';}
+function pass(m){const f=filters;if(f.structure&&m.cell.level!==f.structure)return false;if(f.zone&&m.cell.zone!==f.zone)return false;if(f.category&&!m.cell.category.toLowerCase().includes(f.category.toLowerCase()))return false;if(f.stage&&!m.cell.stage.toLowerCase().includes(f.stage.toLowerCase()))return false;if(f.state&&stateLabel(m)!==f.state)return false;if(f.actid&&!m.matched_ids.join(' ').toLowerCase().includes(f.actid.toLowerCase()))return false;if(f.actname&&!m.matched_names.join(' ').toLowerCase().includes(f.actname.toLowerCase()))return false;return true;}
+function buildFilt(){const M=mapData.mappings;const uS=[...new Set(M.map(m=>m.cell.level))].filter(Boolean).sort();const uZ=[...new Set(M.map(m=>m.cell.zone))].filter(Boolean).sort();
+  const sel=(id,ph,opts,v)=>`<select id="${id}"><option value="">${ph}</option>${opts.map(o=>`<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+  const txt=(id,ph,v)=>`<input id="${id}" placeholder="${ph}" value="${v||''}">`;
+  $('filtBar').innerHTML=sel('fS','Structure',uS,filters.structure)+sel('fZ','Zone',uZ,filters.zone)+txt('fC','Category',filters.category)+txt('fSt','Stage',filters.stage)+sel('fState','State',['edited','changed','unchanged','newly dated','orphaned','unmapped'],filters.state)+txt('fAid','Activity ID',filters.actid)+txt('fAn','Activity name',filters.actname)+`<button class="cog" id="fClear">✕ Clear</button>`;
+  const on=(id,k)=>{$(id).oninput=$(id).onchange=e=>{filters[k]=e.target.value;renderRows();};};
+  on('fS','structure');on('fZ','zone');on('fC','category');on('fSt','stage');on('fState','state');on('fAid','actid');on('fAn','actname');
+  $('fClear').onclick=()=>{filters={structure:'',zone:'',category:'',stage:'',state:'',actid:'',actname:''};buildFilt();renderRows();};
+}
+function renderReview(){
+  const s=mapData.stats;
+  $('statBar').innerHTML=`<span>Cells: <b>${s.cells}</b></span><span>Matched: <b>${s.matched}</b></span><span>Changed: <b>${s.changed}</b></span><span>Orphaned: <b>${s.orphaned}</b></span><span>⚑ Out of range: <b>${s.out_of_range}</b></span><span>${s.first_mapping?'First mapping':'Repeat'} · ${s.embedder}</span>`;
+  buildFilt();
+  $('revTable').querySelector('thead').innerHTML='<tr><th><input type="checkbox" id="chkAll" checked></th><th>Structure</th><th>Zone</th><th>Category · Stage</th><th>Current</th><th>New start</th><th>New end</th><th>State</th><th>Activity ID</th><th>Activity name</th><th>Conf.</th></tr>';
+  renderRows();
+}
+function renderRows(){
+  const M=mapData.mappings;const tb=$('revTable').querySelector('tbody');tb.innerHTML='';
+  const order=M.map((m,i)=>({m,i})).filter(x=>pass(x.m)).sort((a,b)=>{const r=m=>m.out_of_range?0:(m.state==='orphaned'?1:(m.state==='changed'?2:(m.matched_ids.length?3:4)));return r(a.m)-r(b.m);});
+  order.forEach(({m,i})=>{
+    const tr=document.createElement('tr');if(m.state==='changed')tr.className='rowchg';if(m.state==='orphaned')tr.className='roworph';
+    const sl=stateLabel(m);const pill=`<span class="pill p-${sl==='changed'?'changed':sl==='orphaned'?'orphan':sl==='newly dated'?'new':sl==='edited'?'edited':'unchanged'}">${sl}</span>`;
+    const cur=(m.cell.start||m.cell.end)?`${fmtDMY(m.cell.start)} – ${fmtDMY(m.cell.end)}`:'<span class=muted>—</span>';
+    const flag=m.out_of_range?'⚑ ':'';
+    tr.innerHTML=`<td><input type="checkbox" class="rchk" data-i="${i}" ${m.accepted!==false?'checked':''}></td>
+      <td>${m.cell.level}</td><td>${m.cell.zone}</td><td>${m.cell.category} · <b>${m.cell.stage}</b></td><td>${cur}</td>
+      <td>${flag}<input type="text" class="dt" data-i="${i}" data-k="s" value="${fmtDMY(m.new_start)}" placeholder="DD-MM-YYYY" style="width:104px"></td>
+      <td><input type="text" class="dt" data-i="${i}" data-k="e" value="${fmtDMY(m.new_end)}" placeholder="DD-MM-YYYY" style="width:104px"></td>
+      <td>${pill}</td>
+      <td class="actcell" data-i="${i}" data-col="id">${m.matched_ids.map((id,j)=>`<span class="chip2">${id}<span class="chipx" data-i="${i}" data-j="${j}">×</span></span>`).join('')||'—'}<span class="pencil">✎</span></td>
+      <td class="actcell" data-i="${i}" data-col="name">${m.matched_names.map(n=>`<span class="chip2">${(n||'').slice(0,30)}</span>`).join('')||'—'}</td>
+      <td>${m.confidence||''}</td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('.dt').forEach(inp=>inp.onchange=e=>{const i=+e.target.dataset.i,k=e.target.dataset.k,iso=dmyToIso(e.target.value);if(k==='s')M[i].new_start=iso;else M[i].new_end=iso;M[i].dateEdited=true;});
+  tb.querySelectorAll('.rchk').forEach(c=>c.onchange=e=>{M[+e.target.dataset.i].accepted=e.target.checked;});
+  tb.querySelectorAll('.chipx').forEach(x=>x.onclick=e=>{e.stopPropagation();const i=+x.dataset.i,j=+x.dataset.j;M[i].matched_ids.splice(j,1);M[i].matched_names.splice(j,1);M[i].edited=true;renderRows();});
+  tb.querySelectorAll('.actcell').forEach(c=>c.onclick=e=>{if(e.target.classList.contains('chipx'))return;openActEditor(+c.dataset.i,c);});
+  $('chkAll').onchange=e=>{tb.querySelectorAll('.rchk').forEach(c=>{c.checked=e.target.checked;M[+c.dataset.i].accepted=e.target.checked;});};
+}
+let aeditor=null;
+function openActEditor(i,cell){
+  if(aeditor)aeditor.remove();
+  const M=mapData.mappings,acts=mapData.activities||[],m=M[i];
+  const box=document.createElement('div');box.style.cssText='position:absolute;z-index:90;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:10px;width:340px';
+  box.innerHTML='<input type="text" placeholder="search id or name" style="width:100%;padding:6px;font-size:12px;border:1px solid var(--line);border-radius:6px"><div class="res" style="max-height:200px;overflow:auto;margin-top:6px"></div>';
+  document.body.appendChild(box);aeditor=box;const r=cell.getBoundingClientRect();box.style.top=(window.scrollY+r.bottom+4)+'px';box.style.left=(window.scrollX+Math.min(r.left,window.innerWidth-360))+'px';
+  const inp=box.querySelector('input'),res=box.querySelector('.res');const acmap={};acts.forEach(a=>acmap[a.id]=a);
+  function draw(q){q=q.toLowerCase();res.innerHTML='';if(!q){res.innerHTML='<div class=muted style="font-size:12px">type to search</div>';return;}
+    acts.filter(a=>!m.matched_ids.includes(a.id)&&(a.id.toLowerCase().includes(q)||a.name.toLowerCase().includes(q))).slice(0,30).forEach(a=>{const d=document.createElement('div');d.style.cssText='padding:5px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--line2)';d.innerHTML=`<b>${a.id}</b> ${a.name}`;d.onclick=()=>{m.matched_ids.push(a.id);m.matched_names.push(a.name);if(!m.dateEdited){const ds=acts.filter(x=>m.matched_ids.includes(x.id)).map(x=>x.start).filter(Boolean).sort();const df=acts.filter(x=>m.matched_ids.includes(x.id)).map(x=>x.finish).filter(Boolean).sort();m.new_start=ds[0]||m.new_start;m.new_end=df[df.length-1]||m.new_end;}m.edited=true;renderRows();draw(inp.value);};res.appendChild(d);});}
+  draw('');inp.oninput=()=>draw(inp.value);inp.focus();
+}
+document.addEventListener('click',e=>{if(aeditor&&!aeditor.contains(e.target)&&!e.target.closest('.actcell'))(aeditor.remove(),aeditor=null);});
+
+// ---- approve/save ----
+$('approveBtn').onclick=async()=>{
+  try{
+    const body={org_id:orgId||'',project_id:projId||'',source_name:clientFileObj.name,
+      mappings:mapData.mappings.map(m=>({cell:m.cell,new_start:m.new_start,new_end:m.new_end,accepted:m.accepted!==false,matched_names:m.matched_names,rule:m.rule}))};
+    const res=await fetch(backendUrl+'/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok)throw new Error('Backend '+res.status);
+    const d=await res.json();
+    const blob=new Blob([d.csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='t3d_mapped_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
+    $('revMsg').textContent=`Saved · learned ${d.learned} patterns · CSV downloaded`;toast('Approved & saved');
+    await loadWin();
+  }catch(e){$('revMsg').textContent='Error: '+(e.message||e);}
+};
+
+// ---- settings ----
+$('settingsBtn').onclick=()=>{$('settingsModal').classList.add('show');$('settingsGate').classList.remove('hide');$('settingsFields').classList.add('hide');$('gatePass').value='';$('gateMsg').textContent='';};
+$('gateClose').onclick=()=>$('settingsModal').classList.remove('show');
+$('closeSettings').onclick=()=>$('settingsModal').classList.remove('show');
+$('gateBtn').onclick=()=>{if($('gatePass').value===SETTINGS_PASSWORD){$('settingsGate').classList.add('hide');$('settingsFields').classList.remove('hide');$('backendUrl').value=backendUrl;$('sbUrl').value=sbUrlCur;$('sbKey').value=sbKeyCur;}else $('gateMsg').textContent='Wrong password';};
+$('saveConn').onclick=async()=>{sbUrlCur=$('sbUrl').value.trim();sbKeyCur=$('sbKey').value.trim();const ok=await connect(sbUrlCur,sbKeyCur,$('backendUrl').value.trim());if(ok){toast('Connected');$('settingsModal').classList.remove('show');}};
+
+// ---- boot ----
+let sbUrlCur=DEFAULT_SB_URL,sbKeyCur=DEFAULT_SB_KEY;
+function boot(){if(!window.supabase)return setTimeout(boot,150);connect(sbUrlCur,sbKeyCur,DEFAULT_BACKEND);}
+boot();
+</script>
+</body>
+</html>
