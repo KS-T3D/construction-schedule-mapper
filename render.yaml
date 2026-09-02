@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: t3d-schedule-mapper
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        sync: false          # set in Render dashboard
+      - key: SUPABASE_KEY
+        sync: false          # set in Render dashboard (anon or service_role)
+      - key: SEM_THRESHOLD
+        value: "0.42"
+      # - key: OPENAI_API_KEY   # add later to switch to OpenAI embeddings
+      #   sync: false
