@@ -80,7 +80,7 @@
   <div class="card hide" id="fileCard">
     <h2><span class="n">2</span> Files &amp; method</h2>
     <div class="row">
-      <div><label class="fld">Client schedule (.xer .csv .xlsx)</label><div class="file-drop" id="clientDrop">Choose client schedule<input type="file" id="clientFile" accept=".xer,.csv,.xls,.xlsx" class="hide"></div></div>
+      <div><label class="fld">Client schedule (.xer .csv .xls .xlsx .mpp)</label><div class="file-drop" id="clientDrop">Choose client schedule<input type="file" id="clientFile" accept=".xer,.csv,.xls,.xlsx,.mpp" class="hide"></div></div>
       <div><label class="fld">Base T3D file (.csv)</label><div class="file-drop" id="baseDrop">Choose base T3D CSV<input type="file" id="baseFile" accept=".csv" class="hide"></div></div>
     </div>
     <label class="fld" style="margin-top:14px">Mapping method</label>
@@ -111,7 +111,9 @@
   </div>
 </div>
 
-<div class="overlay" id="overlay"><div class="loader"><div class="spin"></div><div id="loadText" style="font-weight:600">Mapping…</div><div id="loadSub" class="muted" style="font-size:11.5px;margin-top:4px"></div></div></div>
+<div class="overlay" id="overlay"><div class="loader"><div class="spin"></div><div id="loadText" style="font-weight:600">Mapping…</div><div id="loadSub" class="muted" style="font-size:11.5px;margin-top:4px"></div>
+  <div style="height:8px;background:var(--line2);border-radius:6px;overflow:hidden;margin-top:12px"><div id="loadBar" style="height:100%;background:var(--brand);width:0;transition:width .3s"></div></div>
+  <div id="loadTimer" class="muted" style="font-size:11px;margin-top:6px"></div></div></div>
 
 <div class="modal" id="settingsModal"><div class="box">
   <h2 style="font-size:15px;font-weight:700;margin-bottom:12px">Settings</h2>
@@ -132,7 +134,8 @@
 <div class="modal" id="manageModal"><div class="box">
   <h2 style="font-size:15px;font-weight:700;margin-bottom:12px">Manage projects</h2>
   <label class="fld">Delete a project</label>
-  <select id="delProjSel"></select>
+  <input type="text" id="delProjSearch" placeholder="search project or company…" style="margin-bottom:6px">
+  <select id="delProjSel" size="6" style="height:auto"></select>
   <button class="btn ghost sm" id="delProjBtn" style="margin-top:8px;border-color:var(--red);color:var(--red)">Delete selected project + its data</button>
   <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
   <label class="fld">Delete an entire company (org)</label>
@@ -187,17 +190,37 @@ wireDrop('baseDrop','baseFile',f=>{baseFileObj=f;updateMapBtn();});
 function updateMapBtn(){$('mapBtn').disabled=!(sb&&projId&&clientFileObj&&baseFileObj&&backendUrl);}
 $('methodSeg').querySelectorAll('button').forEach(b=>b.onclick=()=>{method=b.dataset.m;$('methodSeg').querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
 
+// ---- loader progress (estimated, based on elapsed time; not true backend %) ----
+let progTimer=null, progStart=0, progEst=60;
+function startProgress(estSeconds){
+  progStart=Date.now(); progEst=estSeconds; $('loadBar').style.width='0%';
+  clearInterval(progTimer);
+  progTimer=setInterval(()=>{
+    const el=(Date.now()-progStart)/1000;
+    // asymptotic curve: approaches ~92% as elapsed approaches estimate, never hits 100 until done
+    const pct=Math.min(92, 92*(1-Math.exp(-el/(progEst*0.5))));
+    $('loadBar').style.width=pct.toFixed(0)+'%';
+    const left=Math.max(0, progEst-el);
+    $('loadTimer').textContent=`Elapsed ${el.toFixed(0)}s · est. ~${left.toFixed(0)}s left (first run after idle is slower)`;
+  },400);
+}
+function endProgress(){clearInterval(progTimer);$('loadBar').style.width='100%';$('loadTimer').textContent='Done';}
+
 // ---- run ----
 $('mapBtn').onclick=async()=>{
   if(!backendUrl){toast('Set the Backend URL in Settings');return;}
-  $('overlay').classList.add('show');$('loadText').textContent='Uploading & mapping…';$('loadSub').textContent='First request may take ~30-60s if the server was asleep';
+  // rough estimate: bigger files take longer; base 20s + scale
+  const sizeMB=((clientFileObj?.size||0)+(baseFileObj?.size||0))/1e6;
+  const est=Math.round(25+sizeMB*8);
+  $('overlay').classList.add('show');$('loadText').textContent='Uploading & mapping…';$('loadSub').textContent='First request may take longer if the server was asleep';
+  startProgress(est);
   try{
     if(method==='full'){
       const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
       const res=await fetch(backendUrl+'/map',{method:'POST',body:fd});
       if(!res.ok)throw new Error('Backend '+res.status+': '+(await res.text()).slice(0,200));
       mapData=await res.json();
-      $('overlay').classList.remove('show');renderReview();$('reviewCard').classList.remove('hide');$('structCard').classList.add('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
+      endProgress();$('overlay').classList.remove('show');renderReview();$('reviewCard').classList.remove('hide');$('structCard').classList.add('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
     }else{
       const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
       // need base cells too for step 2 — call /map to get cells+activities, and /map-structure for grouping
@@ -208,9 +231,9 @@ $('mapBtn').onclick=async()=>{
       if(!mres.ok)throw new Error('Backend '+mres.status);
       mapData=await mres.json();           // holds cells (in mappings) + activities
       structData=await sres.json();
-      $('overlay').classList.remove('show');renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
+      endProgress();$('overlay').classList.remove('show');renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
     }
-  }catch(e){$('overlay').classList.remove('show');$('mapMsg').textContent='Error: '+(e.message||e);}
+  }catch(e){endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Error: '+(e.message||e);}
 };
 
 // ---- sequential step 1: structures ----
@@ -346,11 +369,18 @@ $('manageBtn').onclick=async()=>{$('manageModal').classList.add('show');await fi
 $('closeManage').onclick=()=>$('manageModal').classList.remove('show');
 async function fillManage(){
   const {data:orgs}=await sb.from('organizations').select('*').order('name');
+  const orgMap={};(orgs||[]).forEach(o=>orgMap[o.id]=o.name);
   const os=$('delOrgSel');os.innerHTML='';(orgs||[]).forEach(o=>{const op=document.createElement('option');op.value=o.id;op.textContent=o.name;os.appendChild(op);});
   const {data:projs}=await sb.from('projects').select('id,name,org_id').order('name');
-  const ps=$('delProjSel');ps.innerHTML='';(projs||[]).forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.name;ps.appendChild(op);});
+  window._allProjs=(projs||[]).map(p=>({id:p.id,label:`${p.name}  (${orgMap[p.org_id]||'?'})`,search:(p.name+' '+(orgMap[p.org_id]||'')).toLowerCase()}));
+  drawProjOptions('');
 }
-$('delProjBtn').onclick=async()=>{const id=$('delProjSel').value,name=$('delProjSel').selectedOptions[0]?.textContent;if(!id)return;
+function drawProjOptions(q){
+  const ps=$('delProjSel');ps.innerHTML='';q=q.toLowerCase();
+  (window._allProjs||[]).filter(p=>!q||p.search.includes(q)).forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.label;ps.appendChild(op);});
+}
+$('delProjSearch').oninput=e=>drawProjOptions(e.target.value);
+$('delProjBtn').onclick=async()=>{const id=$('delProjSel').value,label=$('delProjSel').selectedOptions[0]?.textContent||'';const name=label.split('  (')[0];if(!id){toast('select a project');return;}
   if(prompt('Type the project name to confirm deletion:')!==name){toast('Name did not match — cancelled');return;}
   try{await fetch(backendUrl+'/project/'+id,{method:'DELETE'});toast('Project deleted');await fillManage();await $('orgSel').onchange();}catch(e){toast('Delete failed: '+e);}};
 $('delOrgBtn').onclick=async()=>{const id=$('delOrgSel').value,name=$('delOrgSel').selectedOptions[0]?.textContent;if(!id)return;
