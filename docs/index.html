@@ -54,7 +54,7 @@
 <div class="wrap">
   <div class="topbar">
     <h1>TRACK<span>3D</span> Schedule Mapper</h1>
-    <button class="cog" id="settingsBtn">⚙ Settings</button>
+    <div style="display:flex;gap:8px"><button class="cog" id="manageBtn">🗂 Manage</button><button class="cog" id="settingsBtn">⚙ Settings</button></div>
   </div>
   <div id="connMsg" class="hide"></div>
 
@@ -121,10 +121,25 @@
   </div>
   <div id="settingsFields" class="hide">
     <label class="fld">Backend URL (Render)</label><input type="text" id="backendUrl" placeholder="https://your-service.onrender.com">
+    <label class="fld">OpenAI API key <span class="muted">(shared — stored server-side, used by everyone)</span></label><input type="password" id="openaiKey" placeholder="sk-... (leave blank to keep free local model)">
+    <div class="muted" style="font-size:11px;margin-top:2px" id="embInfo"></div>
     <label class="fld">Supabase URL</label><input type="text" id="sbUrl">
     <label class="fld">Supabase anon key</label><input type="password" id="sbKey">
     <div style="margin-top:14px"><button class="btn sm" id="saveConn">Save &amp; reconnect</button><button class="btn ghost sm" id="closeSettings">Close</button></div>
   </div>
+</div></div>
+
+<div class="modal" id="manageModal"><div class="box">
+  <h2 style="font-size:15px;font-weight:700;margin-bottom:12px">Manage projects</h2>
+  <label class="fld">Delete a project</label>
+  <select id="delProjSel"></select>
+  <button class="btn ghost sm" id="delProjBtn" style="margin-top:8px;border-color:var(--red);color:var(--red)">Delete selected project + its data</button>
+  <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+  <label class="fld">Delete an entire company (org)</label>
+  <select id="delOrgSel"></select>
+  <button class="btn ghost sm" id="delOrgBtn" style="margin-top:8px;border-color:var(--red);color:var(--red)">Delete company + ALL its projects/data</button>
+  <div class="muted" style="font-size:11px;margin-top:10px">Deletion is permanent and cascades to versions, learned mappings, and cached vectors.</div>
+  <div style="margin-top:14px;text-align:right"><button class="btn ghost sm" id="closeManage">Close</button></div>
 </div></div>
 <div class="toast" id="toast"></div>
 
@@ -307,7 +322,8 @@ $('approveBtn').onclick=async()=>{
     if(!res.ok)throw new Error('Backend '+res.status);
     const d=await res.json();
     const blob=new Blob([d.csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='t3d_mapped_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
-    $('revMsg').textContent=`Saved · learned ${d.learned} patterns · CSV downloaded`;toast('Approved & saved');
+    const warn=(d.warnings&&d.warnings.length)?(' · ⚠ '+d.warnings.join('; ')):'';
+    $('revMsg').textContent=`CSV downloaded · learned ${d.learned}${warn}`;toast('CSV downloaded'+(warn?' (with warnings)':''));
     await loadWin();
   }catch(e){$('revMsg').textContent='Error: '+(e.message||e);}
 };
@@ -316,8 +332,30 @@ $('approveBtn').onclick=async()=>{
 $('settingsBtn').onclick=()=>{$('settingsModal').classList.add('show');$('settingsGate').classList.remove('hide');$('settingsFields').classList.add('hide');$('gatePass').value='';$('gateMsg').textContent='';};
 $('gateClose').onclick=()=>$('settingsModal').classList.remove('show');
 $('closeSettings').onclick=()=>$('settingsModal').classList.remove('show');
-$('gateBtn').onclick=()=>{if($('gatePass').value===SETTINGS_PASSWORD){$('settingsGate').classList.add('hide');$('settingsFields').classList.remove('hide');$('backendUrl').value=backendUrl;$('sbUrl').value=sbUrlCur;$('sbKey').value=sbKeyCur;}else $('gateMsg').textContent='Wrong password';};
-$('saveConn').onclick=async()=>{sbUrlCur=$('sbUrl').value.trim();sbKeyCur=$('sbKey').value.trim();const ok=await connect(sbUrlCur,sbKeyCur,$('backendUrl').value.trim());if(ok){toast('Connected');$('settingsModal').classList.remove('show');}};
+$('gateBtn').onclick=async()=>{if($('gatePass').value===SETTINGS_PASSWORD){$('settingsGate').classList.add('hide');$('settingsFields').classList.remove('hide');$('backendUrl').value=backendUrl;$('sbUrl').value=sbUrlCur;$('sbKey').value=sbKeyCur;
+  try{const r=await fetch(backendUrl+'/config');const c=await r.json();$('embInfo').textContent='Current: '+(c.has_openai_key?'OpenAI embeddings':'free local model');}catch(e){$('embInfo').textContent='';}
+}else $('gateMsg').textContent='Wrong password';};
+$('saveConn').onclick=async()=>{sbUrlCur=$('sbUrl').value.trim();sbKeyCur=$('sbKey').value.trim();const bu=$('backendUrl').value.trim();
+  const ok=await connect(sbUrlCur,sbKeyCur,bu);
+  const ok2=$('openaiKey').value.trim()!==''||$('openaiKey').value==='';
+  if($('openaiKey').value.trim()!==''){try{await fetch(bu.replace(/\/$/,'')+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({openai_api_key:$('openaiKey').value.trim()})});toast('OpenAI key saved server-side');}catch(e){toast('Key save failed: '+e);}}
+  if(ok){toast('Connected');$('settingsModal').classList.remove('show');}};
+
+// ---- Manage ----
+$('manageBtn').onclick=async()=>{$('manageModal').classList.add('show');await fillManage();};
+$('closeManage').onclick=()=>$('manageModal').classList.remove('show');
+async function fillManage(){
+  const {data:orgs}=await sb.from('organizations').select('*').order('name');
+  const os=$('delOrgSel');os.innerHTML='';(orgs||[]).forEach(o=>{const op=document.createElement('option');op.value=o.id;op.textContent=o.name;os.appendChild(op);});
+  const {data:projs}=await sb.from('projects').select('id,name,org_id').order('name');
+  const ps=$('delProjSel');ps.innerHTML='';(projs||[]).forEach(p=>{const op=document.createElement('option');op.value=p.id;op.textContent=p.name;ps.appendChild(op);});
+}
+$('delProjBtn').onclick=async()=>{const id=$('delProjSel').value,name=$('delProjSel').selectedOptions[0]?.textContent;if(!id)return;
+  if(prompt('Type the project name to confirm deletion:')!==name){toast('Name did not match — cancelled');return;}
+  try{await fetch(backendUrl+'/project/'+id,{method:'DELETE'});toast('Project deleted');await fillManage();await $('orgSel').onchange();}catch(e){toast('Delete failed: '+e);}};
+$('delOrgBtn').onclick=async()=>{const id=$('delOrgSel').value,name=$('delOrgSel').selectedOptions[0]?.textContent;if(!id)return;
+  if(prompt('Type the COMPANY name to confirm deleting it and ALL its data:')!==name){toast('Name did not match — cancelled');return;}
+  try{await fetch(backendUrl+'/org/'+id,{method:'DELETE'});toast('Company deleted');await fillManage();await loadOrgs();}catch(e){toast('Delete failed: '+e);}};
 
 // ---- boot ----
 let sbUrlCur=DEFAULT_SB_URL,sbKeyCur=DEFAULT_SB_KEY;
