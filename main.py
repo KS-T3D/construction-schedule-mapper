@@ -43,13 +43,14 @@ def embed(texts):
             r=requests.post("https://api.openai.com/v1/embeddings",headers={"Authorization":f"Bearer {key}"},
                 json={"model":"text-embedding-3-small","input":texts[i:i+256]},timeout=90); r.raise_for_status()
             out.extend([d["embedding"] for d in r.json()["data"]])
-        return np.array(out,np.float32)
+        return np.array(out,np.float16)
     m=get_embedder()
-    return np.array(m.encode(texts,batch_size=32,show_progress_bar=False,convert_to_numpy=True),np.float32)
-def _norm(v): return v/(np.linalg.norm(v,axis=1,keepdims=True)+1e-9)
+    return np.array(m.encode(texts,batch_size=16,show_progress_bar=False,convert_to_numpy=True),np.float16)
+def _norm(v):
+    v=v.astype(np.float32); return (v/(np.linalg.norm(v,axis=1,keepdims=True)+1e-9)).astype(np.float16)
 def cosine_topk(q,t,k=6):
     if q.shape[0]==0 or t.shape[0]==0: return np.zeros((q.shape[0],k),np.int32),np.zeros((q.shape[0],k),np.float32)
-    q=_norm(q); t=_norm(t); n=q.shape[0]; k=min(k,t.shape[0])
+    q=_norm(q).astype(np.float32); t=_norm(t).astype(np.float32); n=q.shape[0]; k=min(k,t.shape[0])
     idx=np.empty((n,k),np.int32); sims=np.empty((n,k),np.float32); CH=512
     for i in range(0,n,CH):
         block=q[i:i+CH]@t.T; part=np.argsort(-block,axis=1)[:,:k]; idx[i:i+block.shape[0]]=part
@@ -250,37 +251,56 @@ SEM=float(os.environ.get("SEM_THRESHOLD","0.42"))
 async def map_endpoint(client:UploadFile=File(...),base:UploadFile=File(...),org_id:str=Form(""),project_id:str=Form("")):
     acts,cells=_prep(client,base); ps,pe=project_window(project_id); learned=load_learned(org_id,project_id)
     by_id={a["activity_id"]:a for a in acts}
-    cell_loc,cell_work=compute_cell_vectors(cells,project_id)
-    act_loc=embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts]); act_work=embed([a["name"] for a in acts])
-    cl=_norm(cell_loc); cw=_norm(cell_work); al=_norm(act_loc); aw=_norm(act_work)
-    results=[]; CH=256; n=len(cells)
+    # activity vectors kept resident (smaller set); normalized float16
+    al=_norm(embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts]))
+    aw=_norm(embed([a["name"] for a in acts]))
+    # precompute learned lookup per (category,stage) once
+    learn_index={}
+    for a in acts:
+        key=learned.get(pattern_of(a["name"]))
+        if key: learn_index.setdefault(key,[]).append(a)
+    results=[]; CH=400; n=len(cells)
     for i in range(0,n,CH):
-        loc_block=cl[i:i+CH]@al.T; work_block=cw[i:i+CH]@aw.T; comb=0.5*loc_block+0.5*work_block
-        for r in range(comb.shape[0]):
-            ci=i+r; cell=cells[ci]; matched,rule,conf=[],"none",0.0
+        chunk=cells[i:i+CH]
+        # embed ONLY this chunk of cells, compute, then discard
+        cl=_norm(embed([normalize_location(f'{level_of(c["structure"])} {c["zone"]}') for c in chunk]))
+        cw=_norm(embed([f'{c["category"]} {c["stage"]}' for c in chunk]))
+        comb=(0.5*(cl.astype(np.float32)@al.astype(np.float32).T)+0.5*(cw.astype(np.float32)@aw.astype(np.float32).T))
+        for r in range(len(chunk)):
+            cell=chunk[r]; matched,rule,conf=[],"none",0.0
             if cell["wbs_activity_id"] and cell["wbs_activity_id"] in by_id:
                 matched=[by_id[cell["wbs_activity_id"]]]; rule,conf="id_match",1.0
+            elif (cell["category"],cell["stage"]) in learn_index:
+                matched,rule,conf=learn_index[(cell["category"],cell["stage"])],"learned",0.98
             else:
-                lh=[a for a in acts if learned.get(pattern_of(a["name"]))==(cell["category"],cell["stage"])]
-                if lh: matched,rule,conf=lh,"learned",0.98
-                else:
-                    row=comb[r]; order=np.argsort(-row)[:6]
-                    cand=[(acts[int(j)],float(row[int(j)])) for j in order if row[int(j)]>=SEM]
-                    if cand: top=cand[0][1]; matched=[a for a,s in cand if s>=top-0.05]; rule,conf="semantic",top
+                row=comb[r]; order=np.argsort(-row)[:6]
+                cand=[(acts[int(j)],float(row[int(j)])) for j in order if row[int(j)]>=SEM]
+                if cand: top=cand[0][1]; matched=[a for a,s in cand if s>=top-0.05]; rule,conf="semantic",top
             results.append(build_result(cell,matched,rule,conf,ps,pe))
+        del cl,cw,comb   # free chunk memory immediately
     return {"mappings":results,"stats":_stats(results,cells,acts,learned),"activities":acts_payload(acts)}
 
 @app.post("/map-structure")
 async def map_structure(client:UploadFile=File(...),base:UploadFile=File(...),org_id:str=Form(""),project_id:str=Form("")):
-    acts,cells=_prep(client,base); cell_loc,_=compute_cell_vectors(cells,project_id)
-    act_loc=embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts])
-    idx,sims=cosine_topk(cell_loc,act_loc,k=12); groups={}
-    for ci,cell in enumerate(cells):
-        key=f'{cell["structure"]}||{cell["zone"]}'
-        if key not in groups:
-            cand=[(acts[int(idx[ci][r])],float(sims[ci][r])) for r in range(idx.shape[1]) if sims[ci][r]>=SEM]
+    acts,cells=_prep(client,base)
+    al=_norm(embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts])).astype(np.float32)
+    groups={}; CH=400; n=len(cells)
+    # only need one cell per unique structure||zone; dedupe first to save work
+    seen={}; uniq=[]
+    for c in cells:
+        k=f'{c["structure"]}||{c["zone"]}'
+        if k not in seen: seen[k]=True; uniq.append(c)
+    for i in range(0,len(uniq),CH):
+        chunk=uniq[i:i+CH]
+        cl=_norm(embed([normalize_location(f'{level_of(c["structure"])} {c["zone"]}') for c in chunk])).astype(np.float32)
+        sims=cl@al.T
+        for r,cell in enumerate(chunk):
+            row=sims[r]; order=np.argsort(-row)[:40]
+            cand=[(acts[int(j)],float(row[int(j)])) for j in order if row[int(j)]>=SEM]
+            key=f'{cell["structure"]}||{cell["zone"]}'
             groups[key]={"structure":cell["structure"],"zone":cell["zone"],"level":level_of(cell["structure"]),
                          "candidate_activity_ids":[a["activity_id"] for a,s in cand[:40]],"confidence":round(cand[0][1],3) if cand else 0.0}
+        del cl,sims
     return {"structures":list(groups.values()),"activities":acts_payload(acts),"stats":{"structures":len(groups),"activities":len(acts)}}
 
 class StageBody(BaseModel):
