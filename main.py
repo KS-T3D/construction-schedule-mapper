@@ -212,6 +212,8 @@ def _run_map_job(job_id, acts, cells, org_id, project_id, mode, location_assignm
         JOBS[job_id].update(stage="matching", progress=0.5)
         results = []; CH = 400; n = len(cells)
         for i in range(0, n, CH):
+            if JOBS.get(job_id, {}).get("cancel"):
+                JOBS[job_id].update(status="cancelled"); return
             chunk = cells[i:i+CH]
             comb = (0.5*(cl_all[i:i+CH]@al.T) + 0.5*(cw_all[i:i+CH]@aw.T))
             for r in range(len(chunk)):
@@ -247,9 +249,15 @@ async def get_job(job_id: str):
     j = JOBS.get(job_id)
     if not j: raise HTTPException(404, "job not found")
     out = {"status": j["status"], "progress": round(j["progress"], 3), "stage": j["stage"]}
-    if j["status"] == "done": out["result"] = j["result"]; JOBS.pop(job_id, None)  # free memory after fetch
-    if j["status"] == "error": out["error"] = j["error"]; JOBS.pop(job_id, None)
+    if j["status"] == "done": out["result"] = j["result"]
+    if j["status"] == "error": out["error"] = j["error"]
     return out
+
+@app.post("/job/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    j = JOBS.get(job_id)
+    if j: j["cancel"] = True
+    return {"cancelled": bool(j)}
 
 @app.get("/")
 def health(): return {"ok":True,"embedder":embedder_name(),"supabase":bool(sb)}
