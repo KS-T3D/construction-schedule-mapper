@@ -39,9 +39,9 @@ def embed(texts):
     key = get_openai_key()
     if key:
         import requests; out=[]
-        for i in range(0,len(texts),256):
+        for i in range(0,len(texts),2000):
             r=requests.post("https://api.openai.com/v1/embeddings",headers={"Authorization":f"Bearer {key}"},
-                json={"model":"text-embedding-3-small","input":texts[i:i+256]},timeout=90); r.raise_for_status()
+                json={"model":"text-embedding-3-small","input":texts[i:i+2000]},timeout=90); r.raise_for_status()
             out.extend([d["embedding"] for d in r.json()["data"]])
         return np.array(out,np.float16)
     m=get_embedder()
@@ -192,6 +192,65 @@ async def preflight(p:str):
 @app.exception_handler(Exception)
 async def any_err(request:_Req,exc:Exception):
     return JSONResponse(status_code=500,content={"error":str(exc)},headers={"Access-Control-Allow-Origin":"*"})
+import threading, uuid, traceback
+JOBS = {}   # job_id -> {status, progress, stage, result, error}
+
+def _run_map_job(job_id, acts, cells, org_id, project_id, mode, location_assignments=None):
+    try:
+        JOBS[job_id].update(status="running", stage="embedding activities", progress=0.05)
+        ps, pe = project_window(project_id); learned = load_learned(org_id, project_id)
+        by_id = {a["activity_id"]: a for a in acts}
+        al = _norm(embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts])).astype(np.float32)
+        aw = _norm(embed([a["name"] for a in acts])).astype(np.float32)
+        JOBS[job_id].update(stage="embedding cells", progress=0.35)
+        cell_loc, cell_work = compute_cell_vectors(cells, project_id)
+        cl_all = _norm(cell_loc).astype(np.float32); cw_all = _norm(cell_work).astype(np.float32)
+        learn_index = {}
+        for a in acts:
+            key = learned.get(pattern_of(a["name"]))
+            if key: learn_index.setdefault(key, []).append(a)
+        JOBS[job_id].update(stage="matching", progress=0.5)
+        results = []; CH = 400; n = len(cells)
+        for i in range(0, n, CH):
+            chunk = cells[i:i+CH]
+            comb = (0.5*(cl_all[i:i+CH]@al.T) + 0.5*(cw_all[i:i+CH]@aw.T))
+            for r in range(len(chunk)):
+                cell = chunk[r]; matched, rule, conf = [], "none", 0.0
+                if cell["wbs_activity_id"] and cell["wbs_activity_id"] in by_id:
+                    matched = [by_id[cell["wbs_activity_id"]]]; rule, conf = "id_match", 1.0
+                elif (cell["category"], cell["stage"]) in learn_index:
+                    matched, rule, conf = learn_index[(cell["category"], cell["stage"])], "learned", 0.98
+                else:
+                    row = comb[r]; order = np.argsort(-row)[:6]
+                    cand = [(acts[int(j)], float(row[int(j)])) for j in order if row[int(j)] >= SEM]
+                    if cand: top = cand[0][1]; matched = [a for a, sc in cand if sc >= top-0.05]; rule, conf = "semantic", top
+                results.append(build_result(cell, matched, rule, conf, ps, pe))
+            del comb
+            JOBS[job_id].update(progress=0.5 + 0.45*min(1.0, (i+CH)/max(1,n)))
+        JOBS[job_id].update(status="done", progress=1.0, stage="done",
+                            result={"mappings": results, "stats": _stats(results, cells, acts, learned),
+                                    "activities": acts_payload(acts)})
+    except Exception as e:
+        JOBS[job_id].update(status="error", error=f"{e}\n{traceback.format_exc()[:500]}")
+
+@app.post("/map-async")
+async def map_async(client: UploadFile = File(...), base: UploadFile = File(...),
+                    org_id: str = Form(""), project_id: str = Form("")):
+    acts, cells = _prep(client, base)
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {"status": "queued", "progress": 0.0, "stage": "queued", "result": None, "error": None}
+    threading.Thread(target=_run_map_job, args=(job_id, acts, cells, org_id, project_id, "full"), daemon=True).start()
+    return {"job_id": job_id}
+
+@app.get("/job/{job_id}")
+async def get_job(job_id: str):
+    j = JOBS.get(job_id)
+    if not j: raise HTTPException(404, "job not found")
+    out = {"status": j["status"], "progress": round(j["progress"], 3), "stage": j["stage"]}
+    if j["status"] == "done": out["result"] = j["result"]; JOBS.pop(job_id, None)  # free memory after fetch
+    if j["status"] == "error": out["error"] = j["error"]; JOBS.pop(job_id, None)
+    return out
+
 @app.get("/")
 def health(): return {"ok":True,"embedder":embedder_name(),"supabase":bool(sb)}
 
@@ -251,10 +310,12 @@ SEM=float(os.environ.get("SEM_THRESHOLD","0.42"))
 async def map_endpoint(client:UploadFile=File(...),base:UploadFile=File(...),org_id:str=Form(""),project_id:str=Form("")):
     acts,cells=_prep(client,base); ps,pe=project_window(project_id); learned=load_learned(org_id,project_id)
     by_id={a["activity_id"]:a for a in acts}
-    # activity vectors kept resident (smaller set); normalized float16
-    al=_norm(embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts]))
-    aw=_norm(embed([a["name"] for a in acts]))
-    # precompute learned lookup per (category,stage) once
+    # activity vectors (small set) — embedded fresh each run
+    al=_norm(embed([normalize_location(f'{a["name"]} {a["wbs"]}') for a in acts])).astype(np.float32)
+    aw=_norm(embed([a["name"] for a in acts])).astype(np.float32)
+    # CELL vectors — from cache when base unchanged (big speedup on repeat runs)
+    cell_loc,cell_work=compute_cell_vectors(cells,project_id)
+    cl_all=_norm(cell_loc).astype(np.float32); cw_all=_norm(cell_work).astype(np.float32)
     learn_index={}
     for a in acts:
         key=learned.get(pattern_of(a["name"]))
@@ -262,10 +323,7 @@ async def map_endpoint(client:UploadFile=File(...),base:UploadFile=File(...),org
     results=[]; CH=400; n=len(cells)
     for i in range(0,n,CH):
         chunk=cells[i:i+CH]
-        # embed ONLY this chunk of cells, compute, then discard
-        cl=_norm(embed([normalize_location(f'{level_of(c["structure"])} {c["zone"]}') for c in chunk]))
-        cw=_norm(embed([f'{c["category"]} {c["stage"]}' for c in chunk]))
-        comb=(0.5*(cl.astype(np.float32)@al.astype(np.float32).T)+0.5*(cw.astype(np.float32)@aw.astype(np.float32).T))
+        comb=(0.5*(cl_all[i:i+CH]@al.T)+0.5*(cw_all[i:i+CH]@aw.T))
         for r in range(len(chunk)):
             cell=chunk[r]; matched,rule,conf=[],"none",0.0
             if cell["wbs_activity_id"] and cell["wbs_activity_id"] in by_id:
@@ -277,7 +335,7 @@ async def map_endpoint(client:UploadFile=File(...),base:UploadFile=File(...),org
                 cand=[(acts[int(j)],float(row[int(j)])) for j in order if row[int(j)]>=SEM]
                 if cand: top=cand[0][1]; matched=[a for a,s in cand if s>=top-0.05]; rule,conf="semantic",top
             results.append(build_result(cell,matched,rule,conf,ps,pe))
-        del cl,cw,comb   # free chunk memory immediately
+        del comb
     return {"mappings":results,"stats":_stats(results,cells,acts,learned),"activities":acts_payload(acts)}
 
 @app.post("/map-structure")
