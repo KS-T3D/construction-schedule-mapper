@@ -113,7 +113,8 @@
 
 <div class="overlay" id="overlay"><div class="loader"><div class="spin"></div><div id="loadText" style="font-weight:600">Mapping…</div><div id="loadSub" class="muted" style="font-size:11.5px;margin-top:4px"></div>
   <div style="height:8px;background:var(--line2);border-radius:6px;overflow:hidden;margin-top:12px"><div id="loadBar" style="height:100%;background:var(--brand);width:0;transition:width .3s"></div></div>
-  <div id="loadTimer" class="muted" style="font-size:11px;margin-top:6px"></div></div></div>
+  <div id="loadTimer" class="muted" style="font-size:11px;margin-top:6px"></div>
+  <button class="btn ghost sm" id="cancelBtn" style="margin-top:14px">Cancel</button></div></div>
 
 <div class="modal" id="settingsModal"><div class="box">
   <h2 style="font-size:15px;font-weight:700;margin-bottom:12px">Settings</h2>
@@ -207,13 +208,26 @@ function startProgress(estSeconds){
 function endProgress(){clearInterval(progTimer);$('loadBar').style.width='100%';$('loadTimer').textContent='Done';}
 
 // poll an async job until done; updates the loader with REAL backend progress
+let cancelledJob=false, currentJobId=null;
 async function pollJob(jobId){
   clearInterval(progTimer);   // stop the estimated bar; use real progress now
+  currentJobId=jobId; cancelledJob=false;
+  let notFoundCount=0;
   while(true){
-    await new Promise(r=>setTimeout(r,2000));
-    let j;
-    try{ const res=await fetch(backendUrl+'/job/'+jobId); j=await res.json(); }
-    catch(e){ continue; }   // transient network blip; keep polling
+    if(cancelledJob) throw new Error('__cancelled__');
+    await new Promise(r=>setTimeout(r,5000));
+    if(cancelledJob) throw new Error('__cancelled__');
+    let res, j;
+    try{ res=await fetch(backendUrl+'/job/'+jobId); }
+    catch(e){ continue; }
+    if(res.status===429){ await new Promise(r=>setTimeout(r,4000)); continue; }
+    if(res.status===404){
+      notFoundCount++;
+      if(notFoundCount>6) throw new Error('Job lost on server (likely the free instance restarted under load). Try again, or use a larger tier / run locally.');
+      continue;
+    }
+    notFoundCount=0;
+    try{ j=await res.json(); }catch(e){ continue; }
     if(j.status==='error') throw new Error(j.error||'job failed');
     const el=((Date.now()-progStart)/1000).toFixed(0);
     $('loadText').textContent='Mapping… '+(j.stage||'');
@@ -222,6 +236,13 @@ async function pollJob(jobId){
     if(j.status==='done') return j.result;
   }
 }
+$('cancelBtn').onclick=async()=>{
+  cancelledJob=true;
+  if(currentJobId){ try{ fetch(backendUrl+'/job/'+currentJobId+'/cancel',{method:'POST'}); }catch(e){} }
+  endProgress(); $('overlay').classList.remove('show');
+  $('mapMsg').textContent='Cancelled after '+((Date.now()-runStart)/1000).toFixed(1)+'s';
+  toast('Cancelled');
+};
 
 // ---- run ----
 let runStart=0;
@@ -254,7 +275,7 @@ $('mapBtn').onclick=async()=>{
       structData=await sres.json();
       endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Structures mapped in '+((Date.now()-runStart)/1000).toFixed(1)+'s';renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
     }
-  }catch(e){endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Failed after '+((Date.now()-runStart)/1000).toFixed(1)+'s — '+(e.message||e);}
+  }catch(e){endProgress();$('overlay').classList.remove('show');if((e.message||'').includes('__cancelled__'))return;$('mapMsg').textContent='Failed after '+((Date.now()-runStart)/1000).toFixed(1)+'s — '+(e.message||e);}
 };
 
 // ---- sequential step 1: structures ----
