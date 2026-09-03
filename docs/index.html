@@ -206,21 +206,42 @@ function startProgress(estSeconds){
 }
 function endProgress(){clearInterval(progTimer);$('loadBar').style.width='100%';$('loadTimer').textContent='Done';}
 
+// poll an async job until done; updates the loader with REAL backend progress
+async function pollJob(jobId){
+  clearInterval(progTimer);   // stop the estimated bar; use real progress now
+  while(true){
+    await new Promise(r=>setTimeout(r,2000));
+    let j;
+    try{ const res=await fetch(backendUrl+'/job/'+jobId); j=await res.json(); }
+    catch(e){ continue; }   // transient network blip; keep polling
+    if(j.status==='error') throw new Error(j.error||'job failed');
+    const el=((Date.now()-progStart)/1000).toFixed(0);
+    $('loadText').textContent='Mapping… '+(j.stage||'');
+    $('loadBar').style.width=Math.round((j.progress||0)*100)+'%';
+    $('loadTimer').textContent=`Elapsed ${el}s · ${Math.round((j.progress||0)*100)}%`;
+    if(j.status==='done') return j.result;
+  }
+}
+
 // ---- run ----
+let runStart=0;
 $('mapBtn').onclick=async()=>{
   if(!backendUrl){toast('Set the Backend URL in Settings');return;}
+  runStart=Date.now();
   // rough estimate: bigger files take longer; base 20s + scale
   const sizeMB=((clientFileObj?.size||0)+(baseFileObj?.size||0))/1e6;
   const est=Math.round(25+sizeMB*8);
   $('overlay').classList.add('show');$('loadText').textContent='Uploading & mapping…';$('loadSub').textContent='First request may take longer if the server was asleep';
+  $('mapMsg').textContent='';
   startProgress(est);
   try{
     if(method==='full'){
       const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
-      const res=await fetch(backendUrl+'/map',{method:'POST',body:fd});
+      const res=await fetch(backendUrl+'/map-async',{method:'POST',body:fd});
       if(!res.ok)throw new Error('Backend '+res.status+': '+(await res.text()).slice(0,200));
-      mapData=await res.json();
-      endProgress();$('overlay').classList.remove('show');renderReview();$('reviewCard').classList.remove('hide');$('structCard').classList.add('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
+      const {job_id}=await res.json();
+      mapData=await pollJob(job_id);
+      endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Completed in '+((Date.now()-runStart)/1000).toFixed(1)+'s';renderReview();$('reviewCard').classList.remove('hide');$('structCard').classList.add('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
     }else{
       const fd=new FormData();fd.append('client',clientFileObj);fd.append('base',baseFileObj);fd.append('org_id',orgId||'');fd.append('project_id',projId||'');
       // need base cells too for step 2 — call /map to get cells+activities, and /map-structure for grouping
@@ -231,9 +252,9 @@ $('mapBtn').onclick=async()=>{
       if(!mres.ok)throw new Error('Backend '+mres.status);
       mapData=await mres.json();           // holds cells (in mappings) + activities
       structData=await sres.json();
-      endProgress();$('overlay').classList.remove('show');renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
+      endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Structures mapped in '+((Date.now()-runStart)/1000).toFixed(1)+'s';renderStructures();$('structCard').classList.remove('hide');$('reviewCard').classList.add('hide');$('structCard').scrollIntoView({behavior:'smooth'});
     }
-  }catch(e){endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Error: '+(e.message||e);}
+  }catch(e){endProgress();$('overlay').classList.remove('show');$('mapMsg').textContent='Failed after '+((Date.now()-runStart)/1000).toFixed(1)+'s — '+(e.message||e);}
 };
 
 // ---- sequential step 1: structures ----
@@ -267,6 +288,7 @@ function openStructEditor(i,cell){
 document.addEventListener('click',e=>{if(seditor&&!seditor.contains(e.target)&&!e.target.closest('.structacts'))(seditor.remove(),seditor=null);});
 
 $('toStagesBtn').onclick=async()=>{
+  const stageStart=Date.now();
   $('overlay').classList.add('show');$('loadText').textContent='Mapping stages within confirmed structures…';$('loadSub').textContent='';
   try{
     const loc={};structData.structures.forEach(s=>{loc[s.structure+'||'+s.zone]=s.candidate_activity_ids;});
@@ -275,8 +297,8 @@ $('toStagesBtn').onclick=async()=>{
     const res=await fetch(backendUrl+'/map-stages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!res.ok)throw new Error('Backend '+res.status);
     const sd=await res.json();mapData.mappings=sd.mappings;mapData.stats=sd.stats;
-    $('overlay').classList.remove('show');$('structCard').classList.add('hide');renderReview();$('reviewCard').classList.remove('hide');$('reviewCard').scrollIntoView({behavior:'smooth'});
-  }catch(e){$('overlay').classList.remove('show');toast('Error: '+(e.message||e));}
+    $('overlay').classList.remove('show');$('structCard').classList.add('hide');renderReview();$('reviewCard').classList.remove('hide');$('revMsg').textContent='Stages mapped in '+((Date.now()-stageStart)/1000).toFixed(1)+'s';$('reviewCard').scrollIntoView({behavior:'smooth'});
+  }catch(e){$('overlay').classList.remove('show');$('revMsg').textContent='Failed after '+((Date.now()-stageStart)/1000).toFixed(1)+'s — '+(e.message||e);}
 };
 
 // ---- review ----
